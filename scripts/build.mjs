@@ -33,16 +33,35 @@ const filesToRename = [
 
 const tempSuffix = '.prebuild';
 
-async function renameFiles(files, action) {
+async function createTempVersion(filePath) {
+  const content = await fs.readFile(filePath, 'utf8');
+  // Remove AI-related imports and component usage
+  const cleanedContent = content
+    .replace(/import.*@\/lib\/ai[^;]*;?\n/g, '')
+    .replace(/import.*@\/components\/video-exercise[^;]*;?\n/g, '')
+    .replace(/import.*@\/lib\/wearables[^;]*;?\n/g, '')
+    .replace(/<VideoPlayer[^>]*>.*?<\/VideoPlayer>/gs, '<div>Video Player Placeholder</div>')
+    .replace(/<VideoExerciseHeader[^>]*>.*?<\/VideoExerciseHeader>/gs, '<div>Header Placeholder</div>')
+    .replace(/<BiometricStatus[^>]*>.*?<\/BiometricStatus>/gs, '<div>Biometric Status Placeholder</div>')
+    .replace(/<PerformancePrediction[^>]*>.*?<\/PerformancePrediction>/gs, '<div>Performance Prediction Placeholder</div>')
+    .replace(/<VideoAnalysis[^>]*>.*?<\/VideoAnalysis>/gs, '<div>Video Analysis Placeholder</div>');
+  
+  await fs.writeFile(`${filePath}${tempSuffix}`, cleanedContent);
+}
+
+async function processFiles(files, action) {
   for (const file of files) {
     const fullPath = join(process.cwd(), file);
     try {
       const stats = await fs.stat(fullPath);
       if (stats.isFile()) {
-        const newPath = action === 'hide' 
-          ? `${fullPath}${tempSuffix}` 
-          : fullPath.replace(tempSuffix, '');
-        await fs.rename(fullPath, newPath);
+        if (action === 'hide') {
+          await createTempVersion(fullPath);
+          await fs.rename(fullPath, `${fullPath}${tempSuffix}.bak`);
+        } else {
+          await fs.rename(`${fullPath}${tempSuffix}.bak`, fullPath);
+          await fs.unlink(`${fullPath}${tempSuffix}`);
+        }
       } else if (stats.isDirectory()) {
         const newPath = action === 'hide' 
           ? `${fullPath}${tempSuffix}` 
@@ -59,9 +78,9 @@ async function renameFiles(files, action) {
 
 async function main() {
   try {
-    console.log('Temporarily hiding AI-related files...');
-    // Hide files before build
-    await renameFiles(filesToRename, 'hide');
+    console.log('Processing AI-related files...');
+    // Hide files and create temp versions
+    await processFiles(filesToRename, 'hide');
 
     console.log('Running Next.js build...');
     // Run the build command
@@ -71,8 +90,8 @@ async function main() {
     process.exit(1);
   } finally {
     console.log('Restoring AI-related files...');
-    // Always try to restore files, even if build fails
-    await renameFiles(filesToRename.map(f => f + tempSuffix), 'restore');
+    // Always try to restore files
+    await processFiles(filesToRename.map(f => f + tempSuffix), 'restore');
   }
 }
 
