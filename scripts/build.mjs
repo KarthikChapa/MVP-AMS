@@ -33,65 +33,91 @@ const filesToRename = [
 
 const tempSuffix = '.prebuild';
 
-async function createTempVersion(filePath) {
-  const content = await fs.readFile(filePath, 'utf8');
-  // Remove AI-related imports and component usage
-  const cleanedContent = content
-    .replace(/import.*@\/lib\/ai[^;]*;?\n/g, '')
-    .replace(/import.*@\/components\/video-exercise[^;]*;?\n/g, '')
-    .replace(/import.*@\/lib\/wearables[^;]*;?\n/g, '')
-    .replace(/<VideoPlayer[^>]*>.*?<\/VideoPlayer>/gs, '<div>Video Player Placeholder</div>')
-    .replace(/<VideoExerciseHeader[^>]*>.*?<\/VideoExerciseHeader>/gs, '<div>Header Placeholder</div>')
-    .replace(/<BiometricStatus[^>]*>.*?<\/BiometricStatus>/gs, '<div>Biometric Status Placeholder</div>')
-    .replace(/<PerformancePrediction[^>]*>.*?<\/PerformancePrediction>/gs, '<div>Performance Prediction Placeholder</div>')
-    .replace(/<VideoAnalysis[^>]*>.*?<\/VideoAnalysis>/gs, '<div>Video Analysis Placeholder</div>');
+const apiStubTemplate = `import { createStubEndpoint } from '../stub';
+export const GET = createStubEndpoint('ENDPOINT_NAME');
+export const POST = createStubEndpoint('ENDPOINT_NAME');`;
+
+const componentTemplate = `import { COMPONENT_NAME } from '@/components/stub';
+export default COMPONENT_NAME;`;
+
+async function createStubFile(filePath, type, name) {
+  let content;
+  if (type === 'api') {
+    content = apiStubTemplate.replace(/ENDPOINT_NAME/g, name);
+  } else if (type === 'component') {
+    content = componentTemplate.replace(/COMPONENT_NAME/g, name);
+  }
   
-  await fs.writeFile(`${filePath}${tempSuffix}`, cleanedContent);
+  if (content) {
+    const dir = dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(filePath, content);
+  }
 }
 
-async function processFiles(files, action) {
+async function createStubs() {
+  // Create stub API routes
+  const apiStubs = {
+    'app/api/biometric-fatigue/route.ts': 'Biometric Fatigue',
+    'app/api/career-advisor/route.ts': 'Career Advisor',
+    'app/api/video-analysis/route.ts': 'Video Analysis',
+    'app/api/performance-prediction/route.ts': 'Performance Prediction',
+    'app/api/wearables/route.ts': 'Wearables',
+  };
+
+  // Create stub components
+  const componentStubs = {
+    'app/video-exercise/page.tsx': 'VideoPlayer',
+    'components/video-exercise/video-player.tsx': 'VideoPlayer',
+    'components/video-exercise/exercise-list.tsx': 'VideoExerciseHeader',
+  };
+
+  for (const [path, name] of Object.entries(apiStubs)) {
+    await createStubFile(path, 'api', name);
+  }
+
+  for (const [path, name] of Object.entries(componentStubs)) {
+    await createStubFile(path, 'component', name);
+  }
+}
+
+async function backupFiles(files, action) {
   for (const file of files) {
     const fullPath = join(process.cwd(), file);
     try {
-      const stats = await fs.stat(fullPath);
-      if (stats.isFile()) {
-        if (action === 'hide') {
-          await createTempVersion(fullPath);
-          await fs.rename(fullPath, `${fullPath}${tempSuffix}.bak`);
-        } else {
-          await fs.rename(`${fullPath}${tempSuffix}.bak`, fullPath);
-          await fs.unlink(`${fullPath}${tempSuffix}`);
+      if (action === 'backup') {
+        const exists = await fs.access(fullPath).then(() => true).catch(() => false);
+        if (exists) {
+          await fs.rename(fullPath, `${fullPath}.bak`);
         }
-      } else if (stats.isDirectory()) {
-        const newPath = action === 'hide' 
-          ? `${fullPath}${tempSuffix}` 
-          : fullPath.replace(tempSuffix, '');
-        await fs.rename(fullPath, newPath);
+      } else if (action === 'restore') {
+        const backupExists = await fs.access(`${fullPath}.bak`).then(() => true).catch(() => false);
+        if (backupExists) {
+          await fs.rename(`${fullPath}.bak`, fullPath);
+        }
       }
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.error(`Error processing ${file}:`, error);
-      }
+      console.error(`Error processing ${file}:`, error);
     }
   }
 }
 
 async function main() {
   try {
-    console.log('Processing AI-related files...');
-    // Hide files and create temp versions
-    await processFiles(filesToRename, 'hide');
+    console.log('Backing up AI-related files...');
+    await backupFiles(filesToRename, 'backup');
+
+    console.log('Creating stub files...');
+    await createStubs();
 
     console.log('Running Next.js build...');
-    // Run the build command
     execSync('next build', { stdio: 'inherit' });
   } catch (error) {
     console.error('Build failed:', error);
     process.exit(1);
   } finally {
-    console.log('Restoring AI-related files...');
-    // Always try to restore files
-    await processFiles(filesToRename.map(f => f + tempSuffix), 'restore');
+    console.log('Cleaning up stubs and restoring files...');
+    await backupFiles(filesToRename, 'restore');
   }
 }
 
