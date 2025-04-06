@@ -81,20 +81,52 @@ async function createStubs() {
   }
 }
 
-async function backupFiles(files, action) {
+async function safeWrite(path, content) {
+  const dir = dirname(path);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path, content, 'utf8');
+}
+
+async function safeDelete(path) {
+  try {
+    await fs.unlink(path);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+async function safeMove(src, dest) {
+  try {
+    await fs.rename(src, dest);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+async function processFiles(files, action) {
   for (const file of files) {
     const fullPath = join(process.cwd(), file);
+    const backupPath = `${fullPath}.bak`;
+    const stubPath = `${fullPath}.stub`;
+
     try {
-      if (action === 'backup') {
-        const exists = await fs.access(fullPath).then(() => true).catch(() => false);
-        if (exists) {
-          await fs.rename(fullPath, `${fullPath}.bak`);
+      if (action === 'prepare') {
+        // Backup original file if it exists
+        try {
+          await fs.access(fullPath);
+          await safeMove(fullPath, backupPath);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
         }
       } else if (action === 'restore') {
-        const backupExists = await fs.access(`${fullPath}.bak`).then(() => true).catch(() => false);
-        if (backupExists) {
-          await fs.rename(`${fullPath}.bak`, fullPath);
-        }
+        // Delete stub if it exists
+        await safeDelete(fullPath);
+        // Restore original from backup
+        await safeMove(backupPath, fullPath);
       }
     } catch (error) {
       console.error(`Error processing ${file}:`, error);
@@ -103,9 +135,10 @@ async function backupFiles(files, action) {
 }
 
 async function main() {
+  let buildFailed = false;
   try {
-    console.log('Backing up AI-related files...');
-    await backupFiles(filesToRename, 'backup');
+    console.log('Preparing files for build...');
+    await processFiles(filesToRename, 'prepare');
 
     console.log('Creating stub files...');
     await createStubs();
@@ -114,10 +147,14 @@ async function main() {
     execSync('next build', { stdio: 'inherit' });
   } catch (error) {
     console.error('Build failed:', error);
-    process.exit(1);
+    buildFailed = true;
   } finally {
-    console.log('Cleaning up stubs and restoring files...');
-    await backupFiles(filesToRename, 'restore');
+    console.log('Restoring original files...');
+    await processFiles(filesToRename, 'restore');
+
+    if (buildFailed) {
+      process.exit(1);
+    }
   }
 }
 
